@@ -1,0 +1,5 @@
+{
+  "redirects": [
+    { "source": "/", "destination": "/cuentas-corrientes/", "permanent": false }
+  ]
+}

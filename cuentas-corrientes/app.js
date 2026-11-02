@@ -1,5 +1,5 @@
 /* Cuentas Corrientes - San Martín 70 / Dean Funes 18
-   Datos en Firebase (Firestore) protegidos con contraseña (Firebase Auth). */
+   Datos guardados en Vercel (API /api/datos + Upstash Redis), protegidos con contraseña. */
 
 const SUCURSALES = ["San Martín 70", "Dean Funes 18"];
 const MOTIVOS_DEFAULT = ["Mercadería", "Electros"];
@@ -9,9 +9,6 @@ let deudas = [];
 let pagos = [];
 let motivos = [...MOTIVOS_DEFAULT];
 let sucursalActiva = "todas";
-let fs = null;         // Firestore
-let auth = null;
-let desuscribir = [];
 
 // ---------- Utilidades ----------
 const $ = (s) => document.querySelector(s);
@@ -50,51 +47,59 @@ function confirmar(titulo, texto, etiqueta = "Confirmar") {
   });
 }
 
-// ---------- Persistencia (Firebase) ----------
-const sinId = (o) => { const c = { ...o }; delete c.id; return c; };
+// ---------- Persistencia (API en Vercel) ----------
+const CLAVE_KEY = "cuentasCorrientes.clave";
+let clave = "";
 
-async function escribir(fn) {
-  try { await fn(); return true; }
+async function api(metodo, cuerpo) {
+  const r = await fetch("/api/datos", {
+    method: metodo,
+    headers: { "Content-Type": "application/json", "x-clave": clave },
+    body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+    cache: "no-store",
+  });
+  let data = null;
+  try { data = await r.json(); } catch (e) { /* sin cuerpo */ }
+  if (!r.ok) { const err = new Error((data && data.error) || "error"); err.status = r.status; err.code = data && data.error; throw err; }
+  return data;
+}
+
+function aplicar(data) {
+  deudas = data.deudas || [];
+  pagos = data.pagos || [];
+  render();
+}
+
+async function recargar() {
+  try {
+    aplicar(await api("GET"));
+    marcarSync("Sincronizado", true);
+  } catch (e) {
+    if (e.status === 401) { salir("La contraseña cambió. Ingresala de nuevo."); return; }
+    marcarSync("Sin conexión: los datos pueden no estar al día", false);
+  }
+}
+
+async function escribir(cuerpo) {
+  try { aplicar(await api("POST", cuerpo)); marcarSync("Sincronizado", true); return true; }
   catch (e) {
-    console.error(e);
-    if (e && e.code === "permission-denied") toast("Sin permiso. Volvé a ingresar la contraseña.");
-    else toast("No se pudo guardar. Revisá la conexión y probá de nuevo.");
+    if (e.status === 401) { salir("Ingresá la contraseña de nuevo."); return false; }
+    toast("No se pudo guardar. Revisá la conexión y probá de nuevo.");
     return false;
   }
 }
 
 const datos = {
-  guardarDeuda: (d) => escribir(() => fs.collection("deudas").doc(d.id).set(sinId(d))),
-  eliminarDeuda: (id) => escribir(async () => {
-    const lote = fs.batch();
-    pagos.filter((p) => p.deudaId === id).forEach((p) => lote.delete(fs.collection("pagos").doc(p.id)));
-    lote.delete(fs.collection("deudas").doc(id));
-    await lote.commit();
-  }),
-  guardarPago: (p) => escribir(() => fs.collection("pagos").doc(p.id).set(sinId(p))),
-  eliminarPago: (id) => escribir(() => fs.collection("pagos").doc(id).delete()),
+  guardarDeuda: (deuda) => escribir({ accion: "guardarDeuda", deuda }),
+  eliminarDeuda: (id) => escribir({ accion: "eliminarDeuda", id }),
+  guardarPago: (pago) => escribir({ accion: "guardarPago", pago }),
+  eliminarPago: (id) => escribir({ accion: "eliminarPago", id }),
 };
 
 function marcarSync(texto, ok) {
   const el = $("#estadoSync");
   el.textContent = texto;
   el.classList.toggle("ok", !!ok);
-}
-
-function iniciarDatos() {
-  const listos = { deudas: false, pagos: false };
-  const timer = setTimeout(() => marcarSync("Sin conexión: los datos pueden no estar al día", false), 10000);
-  const chequear = () => { if (listos.deudas && listos.pagos) { clearTimeout(timer); marcarSync("Sincronizado", true); } };
-  const onErr = (e) => { console.error(e); clearTimeout(timer); marcarSync("Se perdió la conexión. Recargá la página.", false); };
-  const escuchar = (col, asignar) => fs.collection(col).onSnapshot({ includeMetadataChanges: true }, (snap) => {
-    asignar(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    if (!snap.metadata.fromCache) { listos[col] = true; chequear(); }
-    render();
-  }, onErr);
-  desuscribir = [
-    escuchar("deudas", (l) => { deudas = l; }),
-    escuchar("pagos", (l) => { pagos = l; }),
-  ];
 }
 
 // ---------- Cálculos ----------
@@ -452,9 +457,11 @@ $("#btnCSV").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
-$("#btnSalir").addEventListener("click", () => auth.signOut());
+$("#btnSalir").addEventListener("click", () => salir());
 
 // ---------- Inicio ----------
+let intervalo = null;
+
 function mostrarCandado(msg) {
   $("#app").hidden = true;
   $("#candado").hidden = false;
@@ -463,50 +470,55 @@ function mostrarCandado(msg) {
   $("#inputClave").focus();
 }
 
-function arrancar() {
-  const cfg = window.FIREBASE_CONFIG;
-  if (!window.firebase || !cfg || !cfg.apiKey || cfg.apiKey.startsWith("PEGAR")) {
-    mostrarCandado("Falta configurar la base de datos (archivo firebase-config.js).");
-    $("#formCandado button").disabled = true;
-    return;
-  }
-  firebase.initializeApp(cfg);
-  auth = firebase.auth();
-  fs = firebase.firestore();
-  renderMotivos();
-
-  auth.onAuthStateChanged((u) => {
-    if (u) {
-      $("#candado").hidden = true;
-      $("#app").hidden = false;
-      render();
-      if (!desuscribir.length) iniciarDatos();
-    } else {
-      desuscribir.forEach((f) => f());
-      desuscribir = [];
-      deudas = []; pagos = [];
-      mostrarCandado();
-    }
-  });
-
-  $("#formCandado").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = $("#formCandado button");
-    btn.disabled = true;
-    $("#errorClave").textContent = "";
-    try {
-      await auth.setPersistence($("#recordarClave").checked
-        ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION);
-      await auth.signInWithEmailAndPassword(window.USUARIO_ACCESO, $("#inputClave").value);
-    } catch (err) {
-      const c = err && err.code || "";
-      $("#errorClave").textContent =
-        c.includes("network") ? "Sin conexión a internet. Probá de nuevo." :
-        c.includes("too-many-requests") ? "Demasiados intentos. Esperá unos minutos." :
-        "Contraseña incorrecta. Probá de nuevo.";
-      $("#inputClave").select();
-    } finally { btn.disabled = false; }
-  });
+function salir(msg) {
+  clave = "";
+  try { localStorage.removeItem(CLAVE_KEY); } catch (e) { /* ignorar */ }
+  clearInterval(intervalo);
+  deudas = []; pagos = [];
+  mostrarCandado(msg);
 }
 
-arrancar();
+function entrar(data) {
+  $("#candado").hidden = true;
+  $("#app").hidden = false;
+  renderMotivos();
+  aplicar(data);
+  marcarSync("Sincronizado", true);
+  clearInterval(intervalo);
+  // Trae los cambios de la otra sucursal cada 15 segundos.
+  intervalo = setInterval(() => { if (!document.hidden) recargar(); }, 15000);
+}
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden && clave) recargar(); });
+
+async function probarClave(c) {
+  clave = c;
+  return api("GET");
+}
+
+$("#formCandado").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#formCandado button");
+  btn.disabled = true;
+  $("#errorClave").textContent = "";
+  try {
+    const data = await probarClave($("#inputClave").value);
+    if ($("#recordarClave").checked) { try { localStorage.setItem(CLAVE_KEY, clave); } catch (err) { /* ignorar */ } }
+    entrar(data);
+  } catch (err) {
+    clave = "";
+    $("#errorClave").textContent =
+      err.status === 401 ? "Contraseña incorrecta. Probá de nuevo." :
+      err.code === "sin_base" ? "Falta conectar la base de datos en Vercel (Storage → Upstash Redis)." :
+      "No se pudo conectar. Revisá internet y probá de nuevo.";
+    $("#inputClave").select();
+  } finally { btn.disabled = false; }
+});
+
+(async () => {
+  let guardada = null;
+  try { guardada = localStorage.getItem(CLAVE_KEY); } catch (e) { /* ignorar */ }
+  if (!guardada) { mostrarCandado(); return; }
+  try { entrar(await probarClave(guardada)); }
+  catch (e) { salir(e.status === 401 ? "" : "No se pudo conectar. Ingresá la contraseña para reintentar."); }
+})();

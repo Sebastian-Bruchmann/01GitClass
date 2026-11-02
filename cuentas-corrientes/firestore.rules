@@ -1,9 +1,0 @@
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Solo quien ingresó con la contraseña puede leer y escribir.
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
