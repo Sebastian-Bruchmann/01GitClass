@@ -123,6 +123,24 @@ function render() {
   }
 }
 
+let animarNumeros = false;
+const sinMovimiento = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function ponerPlata(sel, valor) {
+  const el = $(sel);
+  const desde = parseFloat(el.dataset.v || "0");
+  el.dataset.v = valor;
+  cancelAnimationFrame(el._anim);
+  if (!animarNumeros || sinMovimiento() || desde === valor) { el.textContent = plata(valor); return; }
+  const t0 = performance.now(), dur = 550;
+  const paso = (t) => {
+    const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    el.textContent = plata(desde + (valor - desde) * e);
+    if (k < 1) el._anim = requestAnimationFrame(paso);
+  };
+  el._anim = requestAnimationFrame(paso);
+}
+
 function renderResumen() {
   const hoy = hoyISO(), mes = hoy.slice(0, 7);
   const ds = deudas.filter(enSucursal);
@@ -130,13 +148,13 @@ function renderResumen() {
   const pagosMes = pagos.filter((p) => { const d = deudaPorId(p.deudaId); return d && enSucursal(d) && (p.fecha || "").startsWith(mes); });
   const deudasMes = ds.filter((d) => (d.fecha || "").startsWith(mes));
   const vencidas = abiertas.filter((d) => d.vencimiento && d.vencimiento < hoy);
-  $("#resSaldo").textContent = plata(abiertas.reduce((a, d) => a + saldoDe(d), 0));
+  ponerPlata("#resSaldo", abiertas.reduce((a, d) => a + saldoDe(d), 0));
   $("#resPendientes").textContent = plural(abiertas.length, "deuda abierta", "deudas abiertas");
-  $("#resPagadoMes").textContent = plata(pagosMes.reduce((a, p) => a + p.monto, 0));
+  ponerPlata("#resPagadoMes", pagosMes.reduce((a, p) => a + p.monto, 0));
   $("#resPagosMes").textContent = plural(pagosMes.length, "pago", "pagos");
-  $("#resCargadoMes").textContent = plata(deudasMes.reduce((a, d) => a + d.monto, 0));
+  ponerPlata("#resCargadoMes", deudasMes.reduce((a, d) => a + d.monto, 0));
   $("#resDeudasMes").textContent = plural(deudasMes.length, "deuda nueva", "deudas nuevas");
-  $("#resVencido").textContent = plata(vencidas.reduce((a, d) => a + saldoDe(d), 0));
+  ponerPlata("#resVencido", vencidas.reduce((a, d) => a + saldoDe(d), 0));
   $("#resVencidoCant").textContent = vencidas.length ? plural(vencidas.length, "deuda vencida", "deudas vencidas") : "Nada vencido";
 }
 
@@ -346,11 +364,37 @@ function abrirDetalle(id) {
 document.querySelectorAll("[data-cerrar]").forEach((b) => b.addEventListener("click", () => b.closest("dialog").close()));
 document.querySelectorAll("dialog").forEach((dlg) => dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); }));
 
+function moverIndicador() {
+  const tabs = $("#tabs"), activa = tabs.querySelector(".tab.active");
+  let ind = tabs.querySelector(".tab-indicador");
+  if (!ind) { ind = document.createElement("span"); ind.className = "tab-indicador"; tabs.prepend(ind); tabs.classList.add("con-indicador"); }
+  if (!activa || !activa.offsetWidth) return;
+  ind.style.width = activa.offsetWidth + "px";
+  ind.style.transform = `translateX(${activa.offsetLeft}px)`;
+}
+
+function animarEntrada() {
+  if (sinMovimiento()) return;
+  const piezas = [...document.querySelectorAll(".cards > .card, #sucursalesResumen > .suc-box, .lista-deudas > .deuda, .lista-proveedores > .prov, #tablaHistorial > tr")];
+  piezas.forEach((el, i) => {
+    el.classList.remove("entrar");
+    el.style.setProperty("--i", Math.min(i, 12));
+  });
+  void document.body.offsetWidth; // reinicia la animación
+  piezas.forEach((el) => el.classList.add("entrar"));
+}
+
 function cambiarSucursal(s) {
+  if (s === sucursalActiva) return;
   sucursalActiva = s;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.sucursal === s));
+  moverIndicador();
+  animarNumeros = true;
   render();
+  animarNumeros = false;
+  animarEntrada();
 }
+window.addEventListener("resize", moverIndicador);
 $("#tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) cambiarSucursal(b.dataset.sucursal); });
 $("#sucursalesResumen").addEventListener("click", (e) => { const b = e.target.closest("[data-ir]"); if (b) cambiarSucursal(b.dataset.ir); });
 
@@ -483,6 +527,8 @@ function entrar(data) {
   $("#app").hidden = false;
   renderMotivos();
   aplicar(data);
+  requestAnimationFrame(moverIndicador);
+  animarEntrada();
   marcarSync("Sincronizado", true);
   clearInterval(intervalo);
   // Trae los cambios de la otra sucursal cada 15 segundos.

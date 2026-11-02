@@ -122,3 +122,58 @@ dialog::backdrop { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px
 @media (max-width: 600px) {
   .tab { padding: 8px 12px; font-size: .9rem; }
 }
+
+/* =====================================================================
+   Animaciones: transiciones suaves al pasar el mouse y al cambiar de pestaña
+   ===================================================================== */
+:root { --suave: cubic-bezier(.2, .8, .2, 1); --rebote: cubic-bezier(.34, 1.36, .64, 1); }
+
+/* Al pasar el mouse: las piezas se elevan un poco */
+.card, .suc-box, .deuda, .prov, .btn, .tab, .panel, input, select, textarea {
+  transition: transform .35s var(--suave), box-shadow .35s var(--suave), background-color .3s ease,
+              border-color .3s ease, color .3s ease, filter .2s ease, opacity .3s ease;
+}
+.card:hover, .suc-box:hover { transform: translateY(-4px); box-shadow: 0 18px 40px rgba(20, 35, 70, .16), inset 0 1px 0 var(--glass-shine); }
+.deuda:hover, .prov:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(20, 35, 70, .12), inset 0 1px 0 var(--glass-shine); }
+.btn:hover { transform: translateY(-1px); }
+.btn:active, .tab:active, .suc-box:active { transform: scale(.96); transition-duration: .1s; }
+.tabla tbody tr td { transition: background-color .25s ease; }
+.logo { transition: transform .5s var(--rebote); }
+.marca:hover .logo { transform: rotate(-8deg) scale(1.06); }
+
+/* Indicador de pestaña que se desliza */
+.tabs { position: relative; }
+.tab { position: relative; z-index: 1; }
+.tab-indicador {
+  position: absolute; top: 5px; bottom: 5px; left: 0; width: 0; z-index: 0; border-radius: 999px;
+  background: var(--ink);
+  box-shadow: 0 4px 12px rgba(31, 48, 83, .3), inset 0 1px 0 rgba(255, 255, 255, .25), inset 0 -2px 0 var(--accent);
+  transition: transform .5s var(--rebote), width .5s var(--rebote);
+}
+.tabs.con-indicador .tab.active { background: transparent; box-shadow: none; }
+.tab:not(.active):hover { color: var(--primary); }
+
+/* Contenido que entra al cambiar de pestaña, uno detrás de otro */
+@keyframes entrar { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+.entrar { animation: entrar .5s var(--suave) backwards; animation-delay: calc(var(--i, 0) * 35ms); }
+
+/* Ventanas: aparecen con un pequeño zoom */
+@keyframes modal-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes fondo-in { from { opacity: 0; } to { opacity: 1; } }
+dialog[open] { animation: modal-in .38s var(--rebote); }
+dialog[open]::backdrop { animation: fondo-in .3s ease; }
+
+/* Pantalla de entrada y barra de progreso */
+@keyframes flotar { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+.candado-caja { animation: modal-in .6s var(--rebote); }
+.candado-caja .logo-grande { animation: flotar 4s ease-in-out infinite; }
+.barra > span { transition: width .8s var(--suave); }
+
+/* Fondo que se mueve muy despacio */
+@keyframes deriva { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(2%, -2%) scale(1.04); } }
+body::after { animation: deriva 24s ease-in-out infinite; }
+
+/* Quien prefiere menos movimiento: sin animaciones */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
