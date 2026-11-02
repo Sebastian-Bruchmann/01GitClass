@@ -179,7 +179,7 @@ function renderDeudas() {
         <div style="min-width:0">
           <div class="deuda-top">
             <span class="deuda-prov">${esc(d.proveedor)}</span>
-            <span class="chip">${esc(d.motivo)}</span>
+            <span class="chip${d.motivo === "Electros" ? " electros" : ""}">${esc(d.motivo)}</span>
             ${sucursalActiva === "todas" ? `<span class="chip suc">${esc(d.sucursal)}</span>` : ""}
             ${estadoDe(d) === "parcial" ? `<span class="chip parcial">Pago parcial</span>` : ""}
             ${chipVencimiento(d)}
@@ -313,7 +313,7 @@ function pintarDetalle(id) {
     <div class="det-head">
       <div>
         <h3>${esc(d.proveedor)}</h3>
-        <span class="chip">${esc(d.motivo)}</span>
+        <span class="chip${d.motivo === "Electros" ? " electros" : ""}">${esc(d.motivo)}</span>
         <span class="chip ${estado === "pagada" ? "pagada" : estado === "parcial" ? "parcial" : "deuda"}">${estadoTxt}</span>
         ${chipVencimiento(d)}
       </div>

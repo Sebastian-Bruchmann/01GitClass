@@ -7,12 +7,14 @@
   <title>Cuentas Corrientes</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/webp" href="logo-geo.webp">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <div class="candado" id="candado" hidden>
   <form class="candado-caja" id="formCandado" novalidate>
+    <img class="logo-grande" src="logo-geo.webp" alt="GEO">
     <h1>Cuentas Corrientes</h1>
     <p>San Martín 70 · Dean Funes 18</p>
     <label for="inputClave">Contraseña</label>
@@ -26,9 +28,12 @@
 <div id="app" hidden>
 <header class="topbar">
   <div class="wrap">
-    <div>
-      <h1>Cuentas Corrientes</h1>
-      <p class="sub">Deudas y pagos de San Martín 70 y Dean Funes 18</p>
+    <div class="marca">
+      <img class="logo" src="logo-geo.webp" alt="GEO">
+      <div>
+        <h1>Cuentas Corrientes</h1>
+        <p class="sub">Deudas y pagos de San Martín 70 y Dean Funes 18</p>
+      </div>
     </div>
     <div class="top-der">
       <span class="estado-sync" id="estadoSync">Conectando…</span>
@@ -55,7 +60,7 @@
       <strong class="card-value" id="resPagadoMes">$ 0,00</strong>
       <span class="card-foot" id="resPagosMes">0 pagos</span>
     </article>
-    <article class="card">
+    <article class="card card-cargado">
       <span class="card-label">Cargado este mes</span>
       <strong class="card-value" id="resCargadoMes">$ 0,00</strong>
       <span class="card-foot" id="resDeudasMes">0 deudas nuevas</span>
@@ -70,7 +75,7 @@
   <section class="sucursales-resumen" id="sucursalesResumen"></section>
 
   <div class="actions-row">
-    <button class="btn primary" id="btnNuevaDeuda">＋ Nueva deuda</button>
+    <button class="btn accent" id="btnNuevaDeuda">＋ Nueva deuda</button>
     <button class="btn success" id="btnPagoRapido">✓ Registrar pago</button>
   </div>
 
