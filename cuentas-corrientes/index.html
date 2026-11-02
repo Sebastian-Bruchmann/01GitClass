@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cuentas Corrientes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📒</span>
+      <div>
+        <h1>Cuentas Corrientes</h1>
+        <p class="sub">Control de deudas y pagos por sucursal</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost" id="btnExportar" title="Descargar copia de seguridad">⬇ Respaldo</button>
+      <label class="btn ghost" title="Cargar copia de seguridad">
+        ⬆ Restaurar
+        <input type="file" id="inputImportar" accept="application/json" hidden>
+      </label>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Selector de sucursal -->
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-sucursal="todas">🏬 Todas</button>
+      <button class="tab" data-sucursal="San Martín 70">📍 San Martín 70</button>
+      <button class="tab" data-sucursal="Dean Funes 18">📍 Dean Funes 18</button>
+    </nav>
+
+    <!-- Resumen -->
+    <section class="cards">
+      <article class="card card-deuda">
+        <span class="card-label">Saldo adeudado</span>
+        <strong class="card-value" id="resSaldo">$ 0</strong>
+        <span class="card-foot" id="resPendientes">0 deudas abiertas</span>
+      </article>
+      <article class="card card-pagado">
+        <span class="card-label">Pagado este mes</span>
+        <strong class="card-value" id="resPagadoMes">$ 0</strong>
+        <span class="card-foot" id="resPagosMes">0 pagos</span>
+      </article>
+      <article class="card card-cargado">
+        <span class="card-label">Cargado este mes</span>
+        <strong class="card-value" id="resCargadoMes">$ 0</strong>
+        <span class="card-foot" id="resDeudasMes">0 deudas nuevas</span>
+      </article>
+      <article class="card card-vencido">
+        <span class="card-label">Vencido</span>
+        <strong class="card-value" id="resVencido">$ 0</strong>
+        <span class="card-foot" id="resVencidoCant">nada vencido 🎉</span>
+      </article>
+    </section>
+
+    <!-- Por sucursal (solo en vista "Todas") -->
+    <section class="sucursales-resumen" id="sucursalesResumen"></section>
+
+    <div class="actions-row">
+      <button class="btn primary" id="btnNuevaDeuda">＋ Nueva deuda</button>
+      <button class="btn success" id="btnPagoRapido">✔ Registrar pago</button>
+    </div>
+
+    <!-- Deudas abiertas -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Deudas abiertas</h2>
+        <input type="search" id="buscarDeudas" placeholder="Buscar proveedor, motivo...">
+      </div>
+      <div id="listaDeudas" class="lista-deudas"></div>
+    </section>
+
+    <!-- Saldo por proveedor -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Saldo por proveedor</h2>
+      </div>
+      <div id="listaProveedores" class="lista-proveedores"></div>
+    </section>
+
+    <!-- Historial -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Historial de movimientos</h2>
+        <div class="filtros">
+          <select id="filtroTipo">
+            <option value="todos">Todos</option>
+            <option value="deuda">Solo deudas</option>
+            <option value="pago">Solo pagos</option>
+          </select>
+          <input type="month" id="filtroMes" title="Filtrar por mes">
+          <input type="search" id="buscarHistorial" placeholder="Buscar...">
+          <button class="btn ghost small" id="btnCSV" title="Exportar a Excel (CSV)">CSV</button>
+        </div>
+      </div>
+      <div class="tabla-wrap">
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Sucursal</th>
+              <th>Proveedor</th>
+              <th>Motivo / Detalle</th>
+              <th class="num">Monto</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tablaHistorial"></tbody>
+        </table>
+      </div>
+      <p class="vacio" id="historialVacio" hidden>No hay movimientos para mostrar.</p>
+    </section>
+
+    <p class="nota">💾 Los datos se guardan en este navegador. Usá <b>Respaldo</b> de vez en cuando para guardar una copia.</p>
+  </main>
+
+  <!-- Modal: Nueva / editar deuda -->
+  <dialog id="modalDeuda">
+    <form id="formDeuda" method="dialog">
+      <h3 id="tituloModalDeuda">Nueva deuda</h3>
+      <input type="hidden" name="id">
+      <div class="grid2">
+        <label>Sucursal
+          <select name="sucursal" required>
+            <option>San Martín 70</option>
+            <option>Dean Funes 18</option>
+          </select>
+        </label>
+        <label>Fecha
+          <input type="date" name="fecha" required>
+        </label>
+      </div>
+      <label>Proveedor / Acreedor
+        <input type="text" name="proveedor" list="proveedoresList" placeholder="Ej: Distribuidora López" required>
+        <datalist id="proveedoresList"></datalist>
+      </label>
+      <div class="grid2">
+        <label>Motivo
+          <div class="inline">
+            <select name="motivo" id="selectMotivo" required></select>
+            <button type="button" class="btn ghost small" id="btnNuevoMotivo" title="Agregar motivo">＋</button>
+          </div>
+        </label>
+        <label>Monto ($)
+          <input type="number" name="monto" min="0.01" step="0.01" placeholder="0,00" required>
+        </label>
+      </div>
+      <label>Descripción
+        <textarea name="descripcion" rows="3" placeholder="Detalle de la compra, nº de factura, productos..."></textarea>
+      </label>
+      <label>Vencimiento <small>(opcional)</small>
+        <input type="date" name="vencimiento">
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-cerrar>Cancelar</button>
+        <button type="submit" class="btn primary">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Registrar pago -->
+  <dialog id="modalPago">
+    <form id="formPago" method="dialog">
+      <h3>Registrar pago</h3>
+      <label>Deuda
+        <select name="deudaId" id="selectDeudaPago" required></select>
+      </label>
+      <p class="info-deuda" id="infoDeudaPago"></p>
+      <div class="grid2">
+        <label>Fecha
+          <input type="date" name="fecha" required>
+        </label>
+        <label>Monto ($)
+          <div class="inline">
+            <input type="number" name="monto" min="0.01" step="0.01" required>
+            <button type="button" class="btn ghost small" id="btnPagoTotal" title="Pagar el saldo completo">Total</button>
+          </div>
+        </label>
+      </div>
+      <label>Medio de pago
+        <select name="medio">
+          <option>Efectivo</option>
+          <option>Transferencia</option>
+          <option>Cheque</option>
+          <option>Tarjeta</option>
+          <option>Otro</option>
+        </select>
+      </label>
+      <label>Nota <small>(opcional)</small>
+        <input type="text" name="nota" placeholder="Ej: Nº de comprobante">
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-cerrar>Cancelar</button>
+        <button type="submit" class="btn success">Confirmar pago</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Detalle de deuda -->
+  <dialog id="modalDetalle">
+    <div class="detalle">
+      <div id="detalleContenido"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn danger ghost" id="btnEliminarDeuda">Eliminar</button>
+        <button type="button" class="btn ghost" id="btnEditarDeuda">Editar</button>
+        <button type="button" class="btn success" id="btnPagarDetalle">Registrar pago</button>
+        <button type="button" class="btn ghost" data-cerrar>Cerrar</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
