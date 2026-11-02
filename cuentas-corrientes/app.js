@@ -17,8 +17,39 @@ const hoyISO = () => {
   const d = new Date();
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 };
-const fmt = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 });
-const plata = (n) => fmt.format(n || 0);
+// Números con punto en los miles y coma en los decimales (1.234.567,89), también con 4 cifras.
+const conPuntos = (entero) => String(entero).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+const numero = (n) => {
+  const [ent, dec] = Math.abs(n || 0).toFixed(2).split(".");
+  return (n < 0 ? "-" : "") + conPuntos(ent) + "," + dec;
+};
+const plata = (n) => "$ " + numero(n);
+
+// Campos de monto: se escriben como texto y se les agregan los puntos mientras se tipea.
+function formatearMonto(txt) {
+  let limpio = String(txt).replace(/[^\d,]/g, "");
+  const i = limpio.indexOf(",");
+  let ent = i >= 0 ? limpio.slice(0, i) : limpio;
+  let dec = i >= 0 ? limpio.slice(i + 1).replace(/,/g, "").slice(0, 2) : null;
+  ent = ent.replace(/^0+(?=\d)/, "");
+  return conPuntos(ent) + (dec !== null ? "," + dec : "");
+}
+const montoATexto = (n) => (n || n === 0) && n !== "" ? numero(n).replace(/,00$/, "") : "";
+const leerMonto = (sel) => parseFloat(($(sel).value || "").replace(/\./g, "").replace(",", "."));
+function activarCampoMonto(sel) {
+  const el = $(sel);
+  el.addEventListener("input", () => {
+    const pos = el.selectionStart ?? el.value.length;
+    const significativosAntes = el.value.slice(0, pos).replace(/[^\d,]/g, "").length;
+    el.value = formatearMonto(el.value);
+    let cuenta = 0, nuevaPos = 0;
+    while (nuevaPos < el.value.length && cuenta < significativosAntes) {
+      if (/[\d,]/.test(el.value[nuevaPos])) cuenta++;
+      nuevaPos++;
+    }
+    try { el.setSelectionRange(nuevaPos, nuevaPos); } catch (e) { /* ignorar */ }
+  });
+}
 const fecha = (iso) => { if (!iso) return ""; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const redondear = (n) => Math.round(n * 100) / 100;
@@ -290,7 +321,7 @@ function abrirDeuda(d) {
   $("#deudaFecha").value = d ? d.fecha : hoyISO();
   $("#deudaProveedor").value = d ? d.proveedor : "";
   if (d) $("#selectMotivo").value = d.motivo;
-  $("#deudaMonto").value = d ? d.monto : "";
+  $("#deudaMonto").value = d ? montoATexto(d.monto) : "";
   $("#deudaDescripcion").value = d ? (d.descripcion || "") : "";
   $("#deudaVencimiento").value = d ? (d.vencimiento || "") : "";
   $("#modalDeuda").showModal();
@@ -317,7 +348,7 @@ function actualizarInfoPago(completar) {
   const saldo = saldoDe(d);
   $("#infoDeudaPago").innerHTML = `Saldo pendiente: <b>${plata(saldo)}</b> (original ${plata(d.monto)})` +
     (d.descripcion ? `<br><small>${esc(d.descripcion)}</small>` : "");
-  if (completar) $("#pagoMonto").value = saldo;
+  if (completar) $("#pagoMonto").value = montoATexto(saldo);
 }
 
 let deudaEnDetalle = null;
@@ -404,7 +435,7 @@ $("#btnPagoRapido").addEventListener("click", () => abrirPago());
 $("#formDeuda").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#errorDeuda");
-  const monto = redondear(parseFloat($("#deudaMonto").value));
+  const monto = redondear(leerMonto("#deudaMonto"));
   const proveedor = $("#deudaProveedor").value.trim();
   if (!proveedor) { err.textContent = "Escribí a quién le debés."; return; }
   if (!(monto > 0)) { err.textContent = "Ingresá un monto mayor a cero."; return; }
@@ -430,13 +461,13 @@ $("#formDeuda").addEventListener("submit", async (e) => {
 });
 
 $("#selectDeudaPago").addEventListener("change", () => actualizarInfoPago(true));
-$("#btnPagoTotal").addEventListener("click", () => { const d = deudaPorId($("#selectDeudaPago").value); if (d) $("#pagoMonto").value = saldoDe(d); });
+$("#btnPagoTotal").addEventListener("click", () => { const d = deudaPorId($("#selectDeudaPago").value); if (d) $("#pagoMonto").value = montoATexto(saldoDe(d)); });
 
 $("#formPago").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#errorPago");
   const d = deudaPorId($("#selectDeudaPago").value);
-  const monto = redondear(parseFloat($("#pagoMonto").value));
+  const monto = redondear(leerMonto("#pagoMonto"));
   if (!d || !(monto > 0)) { err.textContent = "Ingresá un monto mayor a cero."; return; }
   if (monto > saldoDe(d)) { err.textContent = `El pago supera el saldo pendiente (${plata(saldoDe(d))}).`; return; }
   if (!$("#pagoFecha").value) { err.textContent = "Elegí la fecha del pago."; return; }
@@ -483,6 +514,9 @@ $("#btnEliminarDeuda").addEventListener("click", async () => {
     `Deuda con ${d.proveedor} por ${plata(d.monto)}.` + (n ? ` También se borran ${plural(n, "pago registrado", "pagos registrados")}.` : ""), "Eliminar");
   if (ok && await datos.eliminarDeuda(d.id)) toast("Deuda eliminada");
 });
+
+activarCampoMonto("#deudaMonto");
+activarCampoMonto("#pagoMonto");
 
 $("#buscarDeudas").addEventListener("input", renderDeudas);
 ["#filtroTipo", "#filtroMes", "#buscarHistorial"].forEach((s) => $(s).addEventListener("input", renderHistorial));
