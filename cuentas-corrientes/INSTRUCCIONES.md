@@ -1,22 +1,12 @@
-# Cuentas Corrientes: publicarla en Vercel
+# Cuentas Corrientes
 
-Son 2 pasos, todo con clics y una sola vez.
+Página para controlar las cuentas corrientes de San Martín 70 y Dean Funes 18.
+Está publicada en Vercel y guarda los datos en Vercel Blob (almacenamiento privado).
 
-## 1. Importar el proyecto
-
-1. Entrá a https://vercel.com y tocá **Continue with GitHub**.
-2. **Add New… → Project** → elegí el repositorio `01GitClass` → **Import**.
-3. No cambies nada y tocá **Deploy**.
-
-## 2. Conectar la base de datos (gratis)
-
-1. En el proyecto, abrí la pestaña **Storage** → **Create Database** → **Upstash for Redis** (plan Free).
-2. Conectala al proyecto con los valores que vienen por defecto.
-3. Pestaña **Deployments** → en el último, menú **⋯** → **Redeploy**.
-
-Listo: el enlace es el que muestra Vercel (algo como `https://01gitclass.vercel.app`).
-Cualquiera con el enlace y la contraseña entra y ve los mismos datos.
+- `cuentas-corrientes/`: la página (HTML, CSS y JS).
+- `api/datos.js`: la API que valida la contraseña y guarda deudas y pagos.
 
 ## Cambiar la contraseña
 
-**Settings → Environment Variables** → agregá `CLAVE_ACCESO` con la contraseña nueva → **Redeploy**.
+En Vercel → proyecto → **Settings → Environment Variables**, agregá `CLAVE_ACCESO`
+con la contraseña nueva y hacé **Redeploy**.

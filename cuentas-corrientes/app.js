@@ -1,5 +1,5 @@
 /* Cuentas Corrientes - San Martín 70 / Dean Funes 18
-   Datos guardados en Vercel (API /api/datos + Upstash Redis), protegidos con contraseña. */
+   Datos guardados en Vercel (API /api/datos + Vercel Blob), protegidos con contraseña. */
 
 const SUCURSALES = ["San Martín 70", "Dean Funes 18"];
 const MOTIVOS_DEFAULT = ["Mercadería", "Electros"];
@@ -509,7 +509,7 @@ $("#formCandado").addEventListener("submit", async (e) => {
     clave = "";
     $("#errorClave").textContent =
       err.status === 401 ? "Contraseña incorrecta. Probá de nuevo." :
-      err.code === "sin_base" ? "Falta conectar la base de datos en Vercel (Storage → Upstash Redis)." :
+      err.code === "sin_base" ? "Falta conectar el almacenamiento (Vercel → Storage → Blob)." :
       "No se pudo conectar. Revisá internet y probá de nuevo.";
     $("#inputClave").select();
   } finally { btn.disabled = false; }

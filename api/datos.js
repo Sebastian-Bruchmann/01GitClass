@@ -1,15 +1,16 @@
 // API de Cuentas Corrientes (función serverless de Vercel).
-// Guarda deudas y pagos en Upstash Redis (Vercel → Storage → Upstash for Redis).
+// Guarda deudas y pagos en Vercel Blob (almacenamiento privado) como un único archivo JSON,
+// con control de concurrencia por ETag para que dos sucursales no se pisen.
 // Toda llamada necesita la contraseña de acceso en el encabezado "x-clave".
 
 const crypto = require("crypto");
+const { get, put, BlobPreconditionFailedError } = require("@vercel/blob");
 
 // SHA-256 de la contraseña de acceso. Para cambiarla sin tocar el código,
 // definí la variable de entorno CLAVE_ACCESO en Vercel (Settings → Environment Variables).
 const CLAVE_HASH_DEFAULT = "f7fece6ac0a1f72d7650fbd6d566ee946f93e500ecb823553fd81cc5bc98a790";
 
-const K_DEUDAS = "cc:deudas";
-const K_PAGOS = "cc:pagos";
+const ARCHIVO = "cuentas/db.json";
 const SUCURSALES = ["San Martín 70", "Dean Funes 18"];
 const MEDIOS = ["Efectivo", "Transferencia", "Cheque", "Tarjeta", "Otro"];
 
@@ -22,37 +23,45 @@ function claveValida(clave) {
   return crypto.timingSafeEqual(esperado, recibido);
 }
 
-function redisConfig() {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-  return url && token ? { url: url.replace(/\/$/, ""), token } : null;
+const hayBase = () => !!(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
+
+async function leer() {
+  const r = await get(ARCHIVO, { access: "private", useCache: false });
+  if (!r || r.statusCode !== 200 || !r.stream) return { data: { deudas: {}, pagos: {} }, etag: null };
+  const txt = await new Response(r.stream).text();
+  let data = {};
+  try { data = JSON.parse(txt); } catch (e) { data = {}; }
+  return { data: { deudas: data.deudas || {}, pagos: data.pagos || {} }, etag: r.blob.etag };
 }
 
-async function redis(cfg, comandos) {
-  const r = await fetch(`${cfg.url}/pipeline`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(comandos),
-  });
-  if (!r.ok) throw new Error(`Redis respondió ${r.status}`);
-  const res = await r.json();
-  const fallo = res.find((x) => x.error);
-  if (fallo) throw new Error(fallo.error);
-  return res.map((x) => x.result);
-}
-
-function hashAObjetos(lista) {
-  const out = [];
-  for (let i = 0; i < (lista || []).length; i += 2) {
-    try { out.push({ id: lista[i], ...JSON.parse(lista[i + 1]) }); } catch (e) { /* ignorar dato roto */ }
+// Aplica un cambio leyendo la última versión; si otro lo modificó en el medio, reintenta.
+async function mutar(cambio) {
+  for (let intento = 0; intento < 6; intento++) {
+    const { data, etag } = await leer();
+    const error = cambio(data);
+    if (error) return { error };
+    try {
+      await put(ARCHIVO, JSON.stringify(data), {
+        access: "private",
+        contentType: "application/json",
+        addRandomSuffix: false,
+        allowOverwrite: !!etag,
+        ...(etag ? { ifMatch: etag } : {}),
+      });
+      return { data };
+    } catch (e) {
+      const choque = e instanceof BlobPreconditionFailedError || /exist|precondition/i.test(String(e && e.message));
+      if (!choque) throw e;
+      await new Promise((r) => setTimeout(r, 80 + Math.random() * 200));
+    }
   }
-  return out;
+  throw new Error("Demasiados cambios simultáneos");
 }
 
-async function leerTodo(cfg) {
-  const [d, p] = await redis(cfg, [["HGETALL", K_DEUDAS], ["HGETALL", K_PAGOS]]);
-  return { deudas: hashAObjetos(d), pagos: hashAObjetos(p) };
-}
+const aListas = (data) => ({
+  deudas: Object.entries(data.deudas).map(([id, d]) => ({ id, ...d })),
+  pagos: Object.entries(data.pagos).map(([id, p]) => ({ id, ...p })),
+});
 
 // ---------- Validación ----------
 const texto = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
@@ -91,7 +100,7 @@ function limpiarPago(p) {
   };
 }
 
-const sinId = (o) => { const c = { ...o }; delete c.id; return JSON.stringify(c); };
+const sinId = (o) => { const c = { ...o }; delete c.id; return c; };
 
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
@@ -101,48 +110,51 @@ module.exports = async (req, res) => {
     return res.status(401).json({ error: "clave" });
   }
 
-  const cfg = redisConfig();
-  if (!cfg) return res.status(500).json({ error: "sin_base" });
+  if (!hayBase()) return res.status(500).json({ error: "sin_base" });
 
   try {
-    if (req.method === "GET") return res.status(200).json(await leerTodo(cfg));
+    if (req.method === "GET") return res.status(200).json(aListas((await leer()).data));
     if (req.method !== "POST") return res.status(405).json({ error: "metodo" });
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
+    let cambio;
 
     switch (body.accion) {
       case "guardarDeuda": {
         const d = limpiarDeuda(body.deuda);
         if (!d) return res.status(400).json({ error: "datos" });
-        await redis(cfg, [["HSET", K_DEUDAS, d.id, sinId(d)]]);
+        cambio = (db) => { db.deudas[d.id] = sinId(d); };
         break;
       }
       case "eliminarDeuda": {
         if (!esId(body.id)) return res.status(400).json({ error: "datos" });
-        const { pagos } = await leerTodo(cfg);
-        const ids = pagos.filter((p) => p.deudaId === body.id).map((p) => p.id);
-        const cmds = [["HDEL", K_DEUDAS, body.id]];
-        if (ids.length) cmds.push(["HDEL", K_PAGOS, ...ids]);
-        await redis(cfg, cmds);
+        cambio = (db) => {
+          delete db.deudas[body.id];
+          for (const [id, p] of Object.entries(db.pagos)) if (p.deudaId === body.id) delete db.pagos[id];
+        };
         break;
       }
       case "guardarPago": {
         const p = limpiarPago(body.pago);
         if (!p) return res.status(400).json({ error: "datos" });
-        const [existe] = await redis(cfg, [["HEXISTS", K_DEUDAS, p.deudaId]]);
-        if (!existe) return res.status(400).json({ error: "deuda_inexistente" });
-        await redis(cfg, [["HSET", K_PAGOS, p.id, sinId(p)]]);
+        cambio = (db) => {
+          if (!db.deudas[p.deudaId]) return "deuda_inexistente";
+          db.pagos[p.id] = sinId(p);
+        };
         break;
       }
       case "eliminarPago": {
         if (!esId(body.id)) return res.status(400).json({ error: "datos" });
-        await redis(cfg, [["HDEL", K_PAGOS, body.id]]);
+        cambio = (db) => { delete db.pagos[body.id]; };
         break;
       }
       default:
         return res.status(400).json({ error: "accion" });
     }
-    return res.status(200).json(await leerTodo(cfg));
+
+    const r = await mutar(cambio);
+    if (r.error) return res.status(400).json({ error: r.error });
+    return res.status(200).json(aListas(r.data));
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: "servidor" });
