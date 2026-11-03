@@ -13,6 +13,12 @@
 </head>
 <body>
 
+<div class="fondo" aria-hidden="true">
+  <div class="orbita o1"><div class="anillo"></div></div>
+  <div class="orbita o2"><div class="anillo"></div></div>
+  <canvas id="destellos"></canvas>
+</div>
+
 <div class="candado" id="candado" hidden>
   <form class="candado-caja" id="formCandado" novalidate>
     <img class="logo-grande" src="logo-geo.webp" alt="GEO">
@@ -231,6 +237,7 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <script src="fondo.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

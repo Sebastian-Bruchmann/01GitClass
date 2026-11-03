@@ -177,3 +177,37 @@ body::after { animation: deriva 24s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* =====================================================================
+   Fondo con movimiento: órbitas como la del logo de GEO, con un cometa
+   que las recorre, y destellos que titilan (fondo.js)
+   ===================================================================== */
+body::after { z-index: -2; }
+.fondo { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+#destellos { position: absolute; inset: 0; }
+
+.orbita { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.orbita .anillo {
+  position: absolute; left: 50%; top: 50%; border-radius: 50%;
+  translate: -50% -50%;
+  /* línea fina de la órbita + el cometa (arco brillante que gira) */
+  background:
+    conic-gradient(from 0deg, transparent 0 62%, var(--cometa-suave) 80%, var(--cometa) 96%, transparent 97%),
+    radial-gradient(closest-side, transparent calc(100% - 2px), var(--linea-orbita) calc(100% - 1.5px), transparent 100%);
+  -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px), #000 100%, transparent 100%);
+          mask: radial-gradient(closest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px), #000 100%, transparent 100%);
+  animation: girar var(--vuelta) linear infinite;
+}
+.orbita.o1 { transform: rotate(-16deg) scaleY(.34); }
+.orbita.o1 .anillo { width: 150vmax; height: 150vmax; --vuelta: 46s; }
+.orbita.o2 { transform: rotate(24deg) scaleY(.26); }
+.orbita.o2 .anillo { width: 105vmax; height: 105vmax; --vuelta: 68s; animation-direction: reverse; opacity: .7; }
+
+:root { --cometa: rgba(237, 97, 31, .85); --cometa-suave: rgba(237, 97, 31, .08); --linea-orbita: rgba(47, 93, 136, .16); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --cometa: rgba(255, 140, 80, .9); --cometa-suave: rgba(244, 123, 62, .06); --linea-orbita: rgba(255, 255, 255, .10); }
+}
+:root[data-theme="dark"] { --cometa: rgba(255, 140, 80, .9); --cometa-suave: rgba(244, 123, 62, .06); --linea-orbita: rgba(255, 255, 255, .10); }
+
+@keyframes girar { to { rotate: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .orbita .anillo { animation: none !important; } }
