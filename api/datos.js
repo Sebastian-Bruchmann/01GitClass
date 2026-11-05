@@ -4,7 +4,7 @@
 // Toda llamada necesita la contraseña de acceso en el encabezado "x-clave".
 
 const crypto = require("crypto");
-const { get, put, BlobPreconditionFailedError } = require("@vercel/blob");
+const { get, head, put, BlobPreconditionFailedError, BlobNotFoundError } = require("@vercel/blob");
 
 // SHA-256 de la contraseña de acceso. Para cambiarla sin tocar el código,
 // definí la variable de entorno CLAVE_ACCESO en Vercel (Settings → Environment Variables).
@@ -25,37 +25,54 @@ function claveValida(clave) {
 
 const hayBase = () => !!(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
 
-async function leer() {
-  const r = await get(ARCHIVO, { access: "private", useCache: false });
-  if (!r || r.statusCode !== 200 || !r.stream) return { data: { deudas: {}, pagos: {} }, etag: null };
-  const txt = await new Response(r.stream).text();
-  let data = {};
-  try { data = JSON.parse(txt); } catch (e) { data = {}; }
-  return { data: { deudas: data.deudas || {}, pagos: data.pagos || {} }, etag: r.blob.etag };
+// Huella (ETag) del archivo según la API de Blob: es la que entiende `ifMatch` al escribir.
+// (La que devuelve la descarga puede venir de otra capa y no coincidir.)
+async function huella() {
+  try { return (await head(ARCHIVO)).etag || null; }
+  catch (e) { if (e instanceof BlobNotFoundError) return null; throw e; }
 }
 
-// Aplica un cambio leyendo la última versión; si otro lo modificó en el medio, reintenta.
+async function leer() {
+  const etag = await huella();
+  if (!etag) return { data: { deudas: {}, pagos: {} }, etag: null };
+  const r = await get(ARCHIVO, { access: "private", useCache: false });
+  // Si la API dice que el archivo existe pero no se pudo leer, no seguimos: así nunca se pisa con datos vacíos.
+  if (!r || r.statusCode !== 200 || !r.stream) throw new Error("No se pudo leer el archivo de datos existente");
+  const data = JSON.parse(await new Response(r.stream).text());
+  return { data: { deudas: data.deudas || {}, pagos: data.pagos || {} }, etag };
+}
+
+async function escribirArchivo(data, opciones) {
+  await put(ARCHIVO, JSON.stringify(data), {
+    access: "private",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    ...opciones,
+  });
+}
+
+// Aplica un cambio sobre la última versión. Si otra sucursal guardó en el medio, vuelve a leer y reintenta.
+// Si la condición sigue fallando, guarda igual sobre la versión recién leída (nunca deja la carga sin guardar).
 async function mutar(cambio) {
-  for (let intento = 0; intento < 6; intento++) {
+  for (let intento = 0; intento < 4; intento++) {
     const { data, etag } = await leer();
     const error = cambio(data);
     if (error) return { error };
     try {
-      await put(ARCHIVO, JSON.stringify(data), {
-        access: "private",
-        contentType: "application/json",
-        addRandomSuffix: false,
-        allowOverwrite: !!etag,
-        ...(etag ? { ifMatch: etag } : {}),
-      });
+      await escribirArchivo(data, etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false });
       return { data };
     } catch (e) {
       const choque = e instanceof BlobPreconditionFailedError || /exist|precondition/i.test(String(e && e.message));
       if (!choque) throw e;
-      await new Promise((r) => setTimeout(r, 80 + Math.random() * 200));
+      console.warn("Reintento de guardado:", e && e.name, e && e.message);
+      await new Promise((r) => setTimeout(r, 60 + Math.random() * 180));
     }
   }
-  throw new Error("Demasiados cambios simultáneos");
+  const { data } = await leer();
+  const error = cambio(data);
+  if (error) return { error };
+  await escribirArchivo(data, { allowOverwrite: true });
+  return { data };
 }
 
 const aListas = (data) => ({
@@ -156,7 +173,7 @@ module.exports = async (req, res) => {
     if (r.error) return res.status(400).json({ error: r.error });
     return res.status(200).json(aListas(r.data));
   } catch (e) {
-    console.error(e);
+    console.error("Error en /api/datos:", e && e.name, e && e.message);
     return res.status(500).json({ error: "servidor" });
   }
 };
