@@ -56,6 +56,44 @@ async function leerTodo(cfg) {
   return { deudas: hashAObjetos(d), pagos: hashAObjetos(p) };
 }
 
+// ---------- Recuperación de los datos del almacenamiento anterior (Vercel Blob) ----------
+// El Blob gratis quedó suspendido por exceso de uso. Cuando Vercel lo libere, esto copia sus deudas y pagos
+// a Redis una sola vez, sin pisar nada que ya exista (HSETNX). Mientras siga bloqueado, se reintenta como mucho
+// una vez por hora para no gastar operaciones.
+const K_MIGRA = "cc:migracion-blob";
+let migracionTerminada = false;
+
+async function recuperarDatosAnteriores(cfg) {
+  if (migracionTerminada || !process.env.BLOB_READ_WRITE_TOKEN) return;
+  const [estado] = await redis(cfg, [["GET", K_MIGRA]]);
+  if (estado === "ok") { migracionTerminada = true; return; }
+  if (estado && Date.now() - Number(estado) < 3600e3) return;
+  await redis(cfg, [["SET", K_MIGRA, String(Date.now())]]);
+  try {
+    const { head, get, BlobNotFoundError } = require("@vercel/blob");
+    let info;
+    try { info = await head("cuentas/db.json"); }
+    catch (e) {
+      if (e instanceof BlobNotFoundError) { await redis(cfg, [["SET", K_MIGRA, "ok"]]); migracionTerminada = true; return; }
+      throw e;
+    }
+    const r = await get(info.url, { access: "private", useCache: false });
+    if (!r || r.statusCode !== 200 || !r.stream) throw new Error("no se pudo leer el archivo anterior");
+    const data = JSON.parse(await new Response(r.stream).text());
+    const deudas = Object.entries(data.deudas || {}), pagos = Object.entries(data.pagos || {});
+    const cmds = [
+      ...deudas.map(([id, d]) => ["HSETNX", K_DEUDAS, id, JSON.stringify(d)]),
+      ...pagos.map(([id, p]) => ["HSETNX", K_PAGOS, id, JSON.stringify(p)]),
+      ["SET", K_MIGRA, "ok"],
+    ];
+    await redis(cfg, cmds);
+    migracionTerminada = true;
+    console.log(`Datos anteriores recuperados: ${deudas.length} deudas y ${pagos.length} pagos`);
+  } catch (e) {
+    console.warn("Datos anteriores todavía no disponibles:", e && e.message);
+  }
+}
+
 // ---------- Validación ----------
 const texto = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const esFecha = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -107,7 +145,10 @@ module.exports = async (req, res) => {
   if (!cfg) return res.status(500).json({ error: "sin_base" });
 
   try {
-    if (req.method === "GET") return res.status(200).json(await leerTodo(cfg));
+    if (req.method === "GET") {
+      await recuperarDatosAnteriores(cfg);
+      return res.status(200).json(await leerTodo(cfg));
+    }
     if (req.method !== "POST") return res.status(405).json({ error: "metodo" });
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
