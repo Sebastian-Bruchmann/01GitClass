@@ -98,6 +98,7 @@ async function api(metodo, cuerpo) {
 function aplicar(data) {
   deudas = data.deudas || [];
   pagos = data.pagos || [];
+  recalcularACuenta();
   render();
 }
 
@@ -134,8 +135,47 @@ function marcarSync(texto, ok) {
 }
 
 // ---------- Cálculos ----------
+const esACuenta = (p) => !p.deudaId;
+const clave2 = (sucursal, proveedor) => sucursal + "|" + String(proveedor || "").trim().toLowerCase();
 const pagosDe = (id) => pagos.filter((p) => p.deudaId === id);
-const pagadoDe = (d) => redondear(pagosDe(d.id).reduce((a, p) => a + p.monto, 0));
+
+// Los pagos "a cuenta" no apuntan a una factura: se reparten entre las deudas del mismo proveedor y
+// sucursal, empezando por la que vence primero (o la más vieja). Se recalcula cada vez que cambian los datos.
+let aplicados = new Map();      // deudaId -> [{ pago, monto }] de pagos a cuenta
+let sobranteACuenta = new Map(); // clave2 -> monto a cuenta que no alcanzó a aplicarse a ninguna deuda
+function recalcularACuenta() {
+  aplicados = new Map(); sobranteACuenta = new Map();
+  const directo = new Map();
+  pagos.forEach((p) => { if (p.deudaId) directo.set(p.deudaId, (directo.get(p.deudaId) || 0) + p.monto); });
+  const orden = (a, b) => (a.vencimiento || a.fecha || "").localeCompare(b.vencimiento || b.fecha || "") ||
+    (a.fecha || "").localeCompare(b.fecha || "") || (a.creado || 0) - (b.creado || 0);
+  const grupos = new Map();
+  pagos.filter(esACuenta).sort((a, b) => (a.fecha || "").localeCompare(b.fecha || "") || (a.creado || 0) - (b.creado || 0))
+    .forEach((p) => { const k = clave2(p.sucursal, p.proveedor); if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(p); });
+  grupos.forEach((lista, k) => {
+    const ds = deudas.filter((d) => clave2(d.sucursal, d.proveedor) === k).sort(orden);
+    const resto = new Map(ds.map((d) => [d.id, redondear(d.monto - (directo.get(d.id) || 0))]));
+    for (const p of lista) {
+      let queda = p.monto;
+      for (const d of ds) {
+        if (queda <= 0) break;
+        const r = resto.get(d.id);
+        if (r <= 0) continue;
+        const usa = redondear(Math.min(r, queda));
+        resto.set(d.id, redondear(r - usa)); queda = redondear(queda - usa);
+        if (!aplicados.has(d.id)) aplicados.set(d.id, []);
+        aplicados.get(d.id).push({ pago: p, monto: usa });
+      }
+      if (queda > 0) sobranteACuenta.set(k, redondear((sobranteACuenta.get(k) || 0) + queda));
+    }
+  });
+}
+const aplicadoACuenta = (id) => (aplicados.get(id) || []).reduce((a, x) => a + x.monto, 0);
+const pagadoDe = (d) => redondear(pagosDe(d.id).reduce((a, p) => a + p.monto, 0) + aplicadoACuenta(d.id));
+const sucursalDePago = (p) => (p.deudaId ? (deudaPorId(p.deudaId) || {}).sucursal : p.sucursal);
+const saldoProveedor = (sucursal, proveedor) => redondear(deudas
+  .filter((d) => clave2(d.sucursal, d.proveedor) === clave2(sucursal, proveedor))
+  .reduce((a, d) => a + Math.max(0, saldoDe(d)), 0));
 const saldoDe = (d) => redondear(d.monto - pagadoDe(d));
 const estadoDe = (d) => { const s = saldoDe(d); return s <= 0 ? "pagada" : s < d.monto ? "parcial" : "pendiente"; };
 const enSucursal = (x) => sucursalActiva === "todas" || x.sucursal === sucursalActiva;
@@ -176,7 +216,7 @@ function renderResumen() {
   const hoy = hoyISO(), mes = hoy.slice(0, 7);
   const ds = deudas.filter(enSucursal);
   const abiertas = ds.filter((d) => saldoDe(d) > 0);
-  const pagosMes = pagos.filter((p) => { const d = deudaPorId(p.deudaId); return d && enSucursal(d) && (p.fecha || "").startsWith(mes); });
+  const pagosMes = pagos.filter((p) => { const s = sucursalDePago(p); return s && enSucursal({ sucursal: s }) && (p.fecha || "").startsWith(mes); });
   const deudasMes = ds.filter((d) => (d.fecha || "").startsWith(mes));
   const vencidas = abiertas.filter((d) => d.vencimiento && d.vencimiento < hoy);
   ponerPlata("#resSaldo", abiertas.reduce((a, d) => a + saldoDe(d), 0));
@@ -251,7 +291,8 @@ function renderProveedores() {
   deudas.filter(enSucursal).forEach((d) => { const s = saldoDe(d); if (s > 0) mapa[d.proveedor] = (mapa[d.proveedor] || 0) + s; });
   const lista = Object.entries(mapa).sort((a, b) => b[1] - a[1]);
   $("#listaProveedores").innerHTML = lista.length
-    ? lista.map(([p, s]) => `<div class="prov"><span title="${esc(p)}">${esc(p)}</span><strong>${plata(s)}</strong></div>`).join("")
+    ? lista.map(([p, s]) => `<div class="prov"><div class="prov-info"><span title="${esc(p)}">${esc(p)}</span><strong>${plata(s)}</strong></div>
+        <button class="btn ghost small" data-pagar-cuenta="${esc(p)}" title="Pagar a cuenta del saldo de ${esc(p)}">Pagar a cuenta</button></div>`).join("")
     : `<p class="vacio">No hay saldos pendientes con proveedores.</p>`;
 }
 
@@ -262,6 +303,15 @@ function movimientos() {
     sucursal: d.sucursal, proveedor: d.proveedor, titulo: d.motivo, detalle: d.descripcion, monto: d.monto,
   }));
   pagos.forEach((p) => {
+    if (esACuenta(p)) {
+      if (!enSucursal(p)) return;
+      movs.push({
+        tipo: "pago", id: p.id, deudaId: "", fecha: p.fecha || "", creado: p.creado || 0,
+        sucursal: p.sucursal, proveedor: p.proveedor, titulo: `Pago a cuenta · ${p.medio}`,
+        detalle: ["Saldo general", p.nota].filter(Boolean).join(" — "), monto: p.monto,
+      });
+      return;
+    }
     const d = deudaPorId(p.deudaId);
     if (!d || !enSucursal(d)) return;
     movs.push({
@@ -328,25 +378,81 @@ function abrirDeuda(d) {
   $("#deudaProveedor").focus();
 }
 
-function abrirPago(deudaId) {
+let modoPago = "factura";
+
+function ponerModoPago(modo) {
+  modoPago = modo;
+  document.querySelectorAll("[data-modo-pago]").forEach((b) => b.classList.toggle("active", b.dataset.modoPago === modo));
+  $("#filaFactura").hidden = modo !== "factura";
+  $("#filaACuenta").hidden = modo !== "cuenta";
+  $("#errorPago").textContent = "";
+  actualizarInfoPago(true);
+}
+
+function proveedoresConSaldo(sucursal) {
+  const mapa = new Map();
+  deudas.filter((d) => d.sucursal === sucursal && saldoDe(d) > 0).forEach((d) => {
+    const k = clave2(d.sucursal, d.proveedor);
+    if (!mapa.has(k)) mapa.set(k, d.proveedor);
+  });
+  return [...mapa.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function llenarProveedoresCuenta(preferido) {
+  const lista = proveedoresConSaldo($("#cuentaSucursal").value);
+  $("#cuentaProveedor").innerHTML = lista.length
+    ? lista.map((p) => `<option value="${esc(p)}">${esc(p)} — ${plata(saldoProveedor($("#cuentaSucursal").value, p))}</option>`).join("")
+    : `<option value="">No hay saldos en esta sucursal</option>`;
+  if (preferido && lista.some((p) => clave2("", p) === clave2("", preferido))) {
+    $("#cuentaProveedor").value = lista.find((p) => clave2("", p) === clave2("", preferido));
+  }
+}
+
+function abrirPago(deudaId, opciones = {}) {
   const abiertas = deudas.filter((d) => saldoDe(d) > 0).filter((d) => deudaId || enSucursal(d))
     .sort((a, b) => a.proveedor.localeCompare(b.proveedor));
-  if (!abiertas.length) { toast("No hay deudas pendientes para pagar"); return; }
+  if (!abiertas.length && !deudas.some((d) => saldoDe(d) > 0)) { toast("No hay deudas pendientes para pagar"); return; }
   $("#formPago").reset();
   $("#errorPago").textContent = "";
   $("#selectDeudaPago").innerHTML = abiertas.map((d) =>
     `<option value="${esc(d.id)}">${esc(d.proveedor)} · ${esc(d.motivo)} · ${esc(d.sucursal)} — ${plata(saldoDe(d))}</option>`).join("");
   if (deudaId) $("#selectDeudaPago").value = deudaId;
+  // Para "a cuenta": sucursal de la pestaña activa (o la del proveedor elegido) y su proveedor
+  const sucursalProv = opciones.proveedor && sucursalActiva === "todas"
+    ? (deudas.find((d) => clave2("", d.proveedor) === clave2("", opciones.proveedor) && saldoDe(d) > 0) || {}).sucursal : null;
+  $("#cuentaSucursal").value = sucursalProv || (sucursalActiva !== "todas" ? sucursalActiva : (abiertas[0] || deudas[0] || {}).sucursal || SUCURSALES[0]);
+  llenarProveedoresCuenta(opciones.proveedor);
   $("#pagoFecha").value = hoyISO();
-  actualizarInfoPago(true);
   $("#modalPago").showModal();
+  ponerModoPago(opciones.modo || "factura");
+}
+
+function saldoObjetivoPago() {
+  if (modoPago === "cuenta") {
+    const prov = $("#cuentaProveedor").value;
+    return prov ? saldoProveedor($("#cuentaSucursal").value, prov) : 0;
+  }
+  const d = deudaPorId($("#selectDeudaPago").value);
+  return d ? saldoDe(d) : 0;
 }
 
 function actualizarInfoPago(completar) {
+  const info = $("#infoDeudaPago");
+  if (modoPago === "cuenta") {
+    const prov = $("#cuentaProveedor").value;
+    if (!prov) { info.textContent = "No hay saldo pendiente con ningún proveedor en esta sucursal."; if (completar) $("#pagoMonto").value = ""; return; }
+    const suc = $("#cuentaSucursal").value;
+    const ds = deudas.filter((d) => clave2(d.sucursal, d.proveedor) === clave2(suc, prov) && saldoDe(d) > 0);
+    const saldo = saldoProveedor(suc, prov);
+    info.innerHTML = `Saldo general con <b>${esc(prov)}</b> en ${esc(suc)}: <b>${plata(saldo)}</b> ` +
+      `(${plural(ds.length, "factura abierta", "facturas abiertas")})<br><small>El pago se descuenta primero de la que vence antes.</small>`;
+    if (completar) $("#pagoMonto").value = montoATexto(saldo);
+    return;
+  }
   const d = deudaPorId($("#selectDeudaPago").value);
-  if (!d) { $("#infoDeudaPago").textContent = ""; return; }
+  if (!d) { info.textContent = ""; return; }
   const saldo = saldoDe(d);
-  $("#infoDeudaPago").innerHTML = `Saldo pendiente: <b>${plata(saldo)}</b> (original ${plata(d.monto)})` +
+  info.innerHTML = `Saldo pendiente: <b>${plata(saldo)}</b> (original ${plata(d.monto)})` +
     (d.descripcion ? `<br><small>${esc(d.descripcion)}</small>` : "");
   if (completar) $("#pagoMonto").value = montoATexto(saldo);
 }
@@ -355,7 +461,11 @@ let deudaEnDetalle = null;
 function pintarDetalle(id) {
   const d = deudaPorId(id);
   const saldo = saldoDe(d);
-  const ps = pagosDe(id).sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""));
+  const ps = [
+    ...pagosDe(id).map((p) => ({ fecha: p.fecha, txt: [p.medio, p.nota].filter(Boolean).map(esc).join(" · "), monto: p.monto })),
+    ...(aplicados.get(id) || []).map((x) => ({ fecha: x.pago.fecha, monto: x.monto,
+      txt: `Pago a cuenta · ${esc(x.pago.medio)}` + (x.monto < x.pago.monto ? ` (parte de ${plata(x.pago.monto)})` : "") + (x.pago.nota ? ` · ${esc(x.pago.nota)}` : "") })),
+  ].sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""));
   const estado = estadoDe(d);
   const estadoTxt = { pagada: "Pagada", parcial: "Pago parcial", pendiente: "Pendiente" }[estado];
   $("#detalleContenido").innerHTML = `
@@ -379,7 +489,7 @@ function pintarDetalle(id) {
     </dl>
     <h4 style="margin:14px 0 6px">Pagos (${ps.length})</h4>
     <div class="det-pagos">
-      ${ps.length ? ps.map((p) => `<div class="det-pago"><span>${fecha(p.fecha)} · ${esc(p.medio)}${p.nota ? ` · ${esc(p.nota)}` : ""}</span><b>${plata(p.monto)}</b></div>`).join("")
+      ${ps.length ? ps.map((p) => `<div class="det-pago"><span>${fecha(p.fecha)} · ${p.txt}</span><b>${plata(p.monto)}</b></div>`).join("")
         : `<small style="color:var(--muted)">Todavía no hay pagos.</small>`}
     </div>`;
   $("#btnPagarDetalle").hidden = saldo <= 0;
@@ -461,22 +571,42 @@ $("#formDeuda").addEventListener("submit", async (e) => {
 });
 
 $("#selectDeudaPago").addEventListener("change", () => actualizarInfoPago(true));
-$("#btnPagoTotal").addEventListener("click", () => { const d = deudaPorId($("#selectDeudaPago").value); if (d) $("#pagoMonto").value = montoATexto(saldoDe(d)); });
+$("#cuentaSucursal").addEventListener("change", () => { llenarProveedoresCuenta(); actualizarInfoPago(true); });
+$("#cuentaProveedor").addEventListener("change", () => actualizarInfoPago(true));
+document.querySelectorAll("[data-modo-pago]").forEach((b) => b.addEventListener("click", () => ponerModoPago(b.dataset.modoPago)));
+$("#btnPagoTotal").addEventListener("click", () => { $("#pagoMonto").value = montoATexto(saldoObjetivoPago()); });
+$("#listaProveedores").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-pagar-cuenta]");
+  if (b) abrirPago(null, { modo: "cuenta", proveedor: b.dataset.pagarCuenta });
+});
 
 $("#formPago").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#errorPago");
-  const d = deudaPorId($("#selectDeudaPago").value);
   const monto = redondear(leerMonto("#pagoMonto"));
-  if (!d || !(monto > 0)) { err.textContent = "Ingresá un monto mayor a cero."; return; }
-  if (monto > saldoDe(d)) { err.textContent = `El pago supera el saldo pendiente (${plata(saldoDe(d))}).`; return; }
+  if (!(monto > 0)) { err.textContent = "Ingresá un monto mayor a cero."; return; }
   if (!$("#pagoFecha").value) { err.textContent = "Elegí la fecha del pago."; return; }
-  const saldaTodo = redondear(saldoDe(d) - monto) <= 0;
-  const ok = await datos.guardarPago({
-    id: uid(), creado: Date.now(), deudaId: d.id,
-    fecha: $("#pagoFecha").value, monto, medio: $("#pagoMedio").value, nota: $("#pagoNota").value.trim(),
-  });
-  if (ok) { $("#modalPago").close(); toast(saldaTodo ? "Deuda saldada" : "Pago registrado"); }
+  const comun = { id: uid(), creado: Date.now(), fecha: $("#pagoFecha").value, monto, medio: $("#pagoMedio").value, nota: $("#pagoNota").value.trim() };
+  let pago, saldaTodo;
+  if (modoPago === "cuenta") {
+    const sucursal = $("#cuentaSucursal").value, proveedor = $("#cuentaProveedor").value;
+    if (!proveedor) { err.textContent = "Elegí a qué proveedor le pagás."; return; }
+    const saldo = saldoProveedor(sucursal, proveedor);
+    if (monto > saldo) { err.textContent = `El pago supera el saldo general con ${proveedor} (${plata(saldo)}).`; return; }
+    pago = { ...comun, aCuenta: true, sucursal, proveedor };
+    saldaTodo = redondear(saldo - monto) <= 0;
+  } else {
+    const d = deudaPorId($("#selectDeudaPago").value);
+    if (!d) { err.textContent = "Elegí la factura que pagás."; return; }
+    if (monto > saldoDe(d)) { err.textContent = `El pago supera el saldo pendiente (${plata(saldoDe(d))}).`; return; }
+    pago = { ...comun, deudaId: d.id };
+    saldaTodo = redondear(saldoDe(d) - monto) <= 0;
+  }
+  const ok = await datos.guardarPago(pago);
+  if (ok) {
+    $("#modalPago").close();
+    toast(modoPago === "cuenta" ? (saldaTodo ? "Cuenta saldada" : "Pago a cuenta registrado") : (saldaTodo ? "Deuda saldada" : "Pago registrado"));
+  }
 });
 
 $("#listaDeudas").addEventListener("click", (e) => {
@@ -494,13 +624,13 @@ $("#tablaHistorial").addEventListener("click", async (e) => {
   const borrar = e.target.closest("[data-borrar-pago]");
   if (borrar) {
     const p = pagos.find((x) => x.id === borrar.dataset.borrarPago);
-    if (p && await confirmar("¿Anular este pago?", `Pago de ${plata(p.monto)} del ${fecha(p.fecha)}. La deuda vuelve a quedar con ese saldo.`, "Anular pago")) {
+    if (p && await confirmar("¿Anular este pago?", `Pago${esACuenta(p) ? " a cuenta" : ""} de ${plata(p.monto)} del ${fecha(p.fecha)}. ${esACuenta(p) ? "El saldo general vuelve a sumar ese monto." : "La deuda vuelve a quedar con ese saldo."}`, "Anular pago")) {
       if (await datos.eliminarPago(p.id)) toast("Pago anulado");
     }
     return;
   }
   const fila = e.target.closest("tr[data-deuda]");
-  if (fila) abrirDetalle(fila.dataset.deuda);
+  if (fila && fila.dataset.deuda) abrirDetalle(fila.dataset.deuda);
 });
 
 $("#btnPagarDetalle").addEventListener("click", () => abrirPago(deudaEnDetalle));

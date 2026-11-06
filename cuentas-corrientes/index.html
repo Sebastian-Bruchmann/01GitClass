@@ -173,9 +173,24 @@
 <dialog id="modalPago">
   <form id="formPago" novalidate>
     <h3>Registrar pago</h3>
-    <label>Deuda
+    <div class="segmento" role="group" aria-label="A qué se aplica el pago">
+      <button type="button" class="seg-btn active" data-modo-pago="factura">Una factura</button>
+      <button type="button" class="seg-btn" data-modo-pago="cuenta">A cuenta (saldo general)</button>
+    </div>
+    <label id="filaFactura">Factura / deuda
       <select name="deudaId" id="selectDeudaPago"></select>
     </label>
+    <div class="grid2" id="filaACuenta" hidden>
+      <label>Sucursal
+        <select id="cuentaSucursal">
+          <option>San Martín 70</option>
+          <option>Dean Funes 18</option>
+        </select>
+      </label>
+      <label>Proveedor
+        <select id="cuentaProveedor"></select>
+      </label>
+    </div>
     <p class="info-deuda" id="infoDeudaPago"></p>
     <div class="grid2">
       <label>Fecha

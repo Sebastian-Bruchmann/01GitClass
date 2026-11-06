@@ -211,3 +211,17 @@ body::after { z-index: -2; }
 
 @keyframes girar { to { rotate: 360deg; } }
 @media (prefers-reduced-motion: reduce) { .orbita .anillo { animation: none !important; } }
+
+/* Registrar pago: elegir entre una factura o a cuenta del saldo general */
+.segmento { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px;
+  background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-shine); }
+.seg-btn { font: inherit; font-weight: 700; font-size: .88rem; border: none; background: transparent; color: var(--muted);
+  padding: 8px 10px; border-radius: 999px; cursor: pointer; transition: background-color .3s var(--suave), color .3s ease, box-shadow .3s ease; }
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active { background: var(--ink); color: var(--ink-text); box-shadow: 0 4px 12px rgba(31, 48, 83, .25), inset 0 -2px 0 var(--accent); }
+.seg-btn:focus-visible { outline: 3px solid var(--primary-soft); outline-offset: 2px; }
+
+/* Saldo por proveedor con botón para pagar a cuenta */
+.prov { flex-direction: column; align-items: stretch; gap: 8px; }
+.prov-info { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.prov .btn { justify-content: center; }

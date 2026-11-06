@@ -118,12 +118,19 @@ function limpiarDeuda(d) {
   };
 }
 
+// Un pago se aplica a una factura (deudaId) o "a cuenta" del saldo general de un proveedor en una sucursal.
 function limpiarPago(p) {
-  if (!p || !esId(p.id) || !esId(p.deudaId) || !montoOk(p.monto) || !esFecha(p.fecha)) return null;
+  if (!p || !esId(p.id) || !montoOk(p.monto) || !esFecha(p.fecha)) return null;
+  const aCuenta = p.aCuenta === true;
+  if (!aCuenta && !esId(p.deudaId)) return null;
+  const destino = aCuenta
+    ? { aCuenta: true, sucursal: p.sucursal, proveedor: texto(p.proveedor, 120) }
+    : { deudaId: p.deudaId };
+  if (aCuenta && (!SUCURSALES.includes(destino.sucursal) || !destino.proveedor)) return null;
   return {
     id: p.id,
     creado: typeof p.creado === "number" ? p.creado : Date.now(),
-    deudaId: p.deudaId,
+    ...destino,
     fecha: p.fecha,
     monto: Math.round(p.monto * 100) / 100,
     medio: MEDIOS.includes(p.medio) ? p.medio : "Otro",
@@ -172,8 +179,10 @@ module.exports = async (req, res) => {
       case "guardarPago": {
         const p = limpiarPago(body.pago);
         if (!p) return res.status(400).json({ error: "datos" });
-        const [existe] = await redis(cfg, [["HEXISTS", K_DEUDAS, p.deudaId]]);
-        if (!existe) return res.status(400).json({ error: "deuda_inexistente" });
+        if (p.deudaId) {
+          const [existe] = await redis(cfg, [["HEXISTS", K_DEUDAS, p.deudaId]]);
+          if (!existe) return res.status(400).json({ error: "deuda_inexistente" });
+        }
         await redis(cfg, [["HSET", K_PAGOS, p.id, sinId(p)]]);
         break;
       }
