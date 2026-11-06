@@ -1,16 +1,17 @@
 // API de Cuentas Corrientes (función serverless de Vercel).
-// Guarda deudas y pagos en Vercel Blob (almacenamiento privado) como un único archivo JSON,
-// con control de concurrencia por ETag para que dos sucursales no se pisen.
+// Guarda deudas y pagos en Upstash Redis (Vercel → Storage → Upstash for Redis).
+// Cada deuda y cada pago es un campo propio de un hash, así dos sucursales pueden guardar a la vez sin pisarse.
+// Cada lectura cuesta 1 pedido (2 comandos); el plan gratis de Upstash alcanza de sobra para dos sucursales.
 // Toda llamada necesita la contraseña de acceso en el encabezado "x-clave".
 
 const crypto = require("crypto");
-const { get, head, put, BlobPreconditionFailedError, BlobNotFoundError } = require("@vercel/blob");
 
 // SHA-256 de la contraseña de acceso. Para cambiarla sin tocar el código,
 // definí la variable de entorno CLAVE_ACCESO en Vercel (Settings → Environment Variables).
 const CLAVE_HASH_DEFAULT = "f7fece6ac0a1f72d7650fbd6d566ee946f93e500ecb823553fd81cc5bc98a790";
 
-const ARCHIVO = "cuentas/db.json";
+const K_DEUDAS = "cc:deudas";
+const K_PAGOS = "cc:pagos";
 const SUCURSALES = ["San Martín 70", "Dean Funes 18"];
 const MEDIOS = ["Efectivo", "Transferencia", "Cheque", "Tarjeta", "Otro"];
 
@@ -23,62 +24,37 @@ function claveValida(clave) {
   return crypto.timingSafeEqual(esperado, recibido);
 }
 
-const hayBase = () => !!(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
-
-// Huella (ETag) del archivo según la API de Blob: es la que entiende `ifMatch` al escribir.
-// (La que devuelve la descarga puede venir de otra capa y no coincidir.)
-async function huella() {
-  try { return (await head(ARCHIVO)).etag || null; }
-  catch (e) { if (e instanceof BlobNotFoundError) return null; throw e; }
+function redisConfig() {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  return url && token ? { url: url.replace(/\/$/, ""), token } : null;
 }
 
-async function leer() {
-  const etag = await huella();
-  if (!etag) return { data: { deudas: {}, pagos: {} }, etag: null };
-  const r = await get(ARCHIVO, { access: "private", useCache: false });
-  // Si la API dice que el archivo existe pero no se pudo leer, no seguimos: así nunca se pisa con datos vacíos.
-  if (!r || r.statusCode !== 200 || !r.stream) throw new Error("No se pudo leer el archivo de datos existente");
-  const data = JSON.parse(await new Response(r.stream).text());
-  return { data: { deudas: data.deudas || {}, pagos: data.pagos || {} }, etag };
-}
-
-async function escribirArchivo(data, opciones) {
-  await put(ARCHIVO, JSON.stringify(data), {
-    access: "private",
-    contentType: "application/json",
-    addRandomSuffix: false,
-    ...opciones,
+async function redis(cfg, comandos) {
+  const r = await fetch(`${cfg.url}/pipeline`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(comandos),
   });
+  if (!r.ok) throw new Error(`Redis respondió ${r.status}`);
+  const res = await r.json();
+  const fallo = res.find((x) => x.error);
+  if (fallo) throw new Error(fallo.error);
+  return res.map((x) => x.result);
 }
 
-// Aplica un cambio sobre la última versión. Si otra sucursal guardó en el medio, vuelve a leer y reintenta.
-// Si la condición sigue fallando, guarda igual sobre la versión recién leída (nunca deja la carga sin guardar).
-async function mutar(cambio) {
-  for (let intento = 0; intento < 4; intento++) {
-    const { data, etag } = await leer();
-    const error = cambio(data);
-    if (error) return { error };
-    try {
-      await escribirArchivo(data, etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false });
-      return { data };
-    } catch (e) {
-      const choque = e instanceof BlobPreconditionFailedError || /exist|precondition/i.test(String(e && e.message));
-      if (!choque) throw e;
-      console.warn("Reintento de guardado:", e && e.name, e && e.message);
-      await new Promise((r) => setTimeout(r, 60 + Math.random() * 180));
-    }
+function hashAObjetos(lista) {
+  const out = [];
+  for (let i = 0; i < (lista || []).length; i += 2) {
+    try { out.push({ id: lista[i], ...JSON.parse(lista[i + 1]) }); } catch (e) { /* ignorar dato roto */ }
   }
-  const { data } = await leer();
-  const error = cambio(data);
-  if (error) return { error };
-  await escribirArchivo(data, { allowOverwrite: true });
-  return { data };
+  return out;
 }
 
-const aListas = (data) => ({
-  deudas: Object.entries(data.deudas).map(([id, d]) => ({ id, ...d })),
-  pagos: Object.entries(data.pagos).map(([id, p]) => ({ id, ...p })),
-});
+async function leerTodo(cfg) {
+  const [d, p] = await redis(cfg, [["HGETALL", K_DEUDAS], ["HGETALL", K_PAGOS]]);
+  return { deudas: hashAObjetos(d), pagos: hashAObjetos(p) };
+}
 
 // ---------- Validación ----------
 const texto = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
@@ -117,7 +93,7 @@ function limpiarPago(p) {
   };
 }
 
-const sinId = (o) => { const c = { ...o }; delete c.id; return c; };
+const sinId = (o) => { const c = { ...o }; delete c.id; return JSON.stringify(c); };
 
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
@@ -127,51 +103,48 @@ module.exports = async (req, res) => {
     return res.status(401).json({ error: "clave" });
   }
 
-  if (!hayBase()) return res.status(500).json({ error: "sin_base" });
+  const cfg = redisConfig();
+  if (!cfg) return res.status(500).json({ error: "sin_base" });
 
   try {
-    if (req.method === "GET") return res.status(200).json(aListas((await leer()).data));
+    if (req.method === "GET") return res.status(200).json(await leerTodo(cfg));
     if (req.method !== "POST") return res.status(405).json({ error: "metodo" });
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
-    let cambio;
 
     switch (body.accion) {
       case "guardarDeuda": {
         const d = limpiarDeuda(body.deuda);
         if (!d) return res.status(400).json({ error: "datos" });
-        cambio = (db) => { db.deudas[d.id] = sinId(d); };
+        await redis(cfg, [["HSET", K_DEUDAS, d.id, sinId(d)]]);
         break;
       }
       case "eliminarDeuda": {
         if (!esId(body.id)) return res.status(400).json({ error: "datos" });
-        cambio = (db) => {
-          delete db.deudas[body.id];
-          for (const [id, p] of Object.entries(db.pagos)) if (p.deudaId === body.id) delete db.pagos[id];
-        };
+        const { pagos } = await leerTodo(cfg);
+        const ids = pagos.filter((p) => p.deudaId === body.id).map((p) => p.id);
+        const cmds = [["HDEL", K_DEUDAS, body.id]];
+        if (ids.length) cmds.push(["HDEL", K_PAGOS, ...ids]);
+        await redis(cfg, cmds);
         break;
       }
       case "guardarPago": {
         const p = limpiarPago(body.pago);
         if (!p) return res.status(400).json({ error: "datos" });
-        cambio = (db) => {
-          if (!db.deudas[p.deudaId]) return "deuda_inexistente";
-          db.pagos[p.id] = sinId(p);
-        };
+        const [existe] = await redis(cfg, [["HEXISTS", K_DEUDAS, p.deudaId]]);
+        if (!existe) return res.status(400).json({ error: "deuda_inexistente" });
+        await redis(cfg, [["HSET", K_PAGOS, p.id, sinId(p)]]);
         break;
       }
       case "eliminarPago": {
         if (!esId(body.id)) return res.status(400).json({ error: "datos" });
-        cambio = (db) => { delete db.pagos[body.id]; };
+        await redis(cfg, [["HDEL", K_PAGOS, body.id]]);
         break;
       }
       default:
         return res.status(400).json({ error: "accion" });
     }
-
-    const r = await mutar(cambio);
-    if (r.error) return res.status(400).json({ error: r.error });
-    return res.status(200).json(aListas(r.data));
+    return res.status(200).json(await leerTodo(cfg));
   } catch (e) {
     console.error("Error en /api/datos:", e && e.name, e && e.message);
     return res.status(500).json({ error: "servidor" });
