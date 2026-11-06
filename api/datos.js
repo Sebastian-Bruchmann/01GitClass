@@ -118,7 +118,7 @@ function limpiarDeuda(d) {
   };
 }
 
-// Un pago se aplica a una factura (deudaId) o "a cuenta" del saldo general de un proveedor en una sucursal.
+// Un pago se aplica a una factura (deudaId) o "a cuenta" del saldo general (de un proveedor o total) de una sucursal.
 function limpiarPago(p) {
   if (!p || !esId(p.id) || !montoOk(p.monto) || !esFecha(p.fecha)) return null;
   const aCuenta = p.aCuenta === true;
@@ -126,7 +126,8 @@ function limpiarPago(p) {
   const destino = aCuenta
     ? { aCuenta: true, sucursal: p.sucursal, proveedor: texto(p.proveedor, 120) }
     : { deudaId: p.deudaId };
-  if (aCuenta && (!SUCURSALES.includes(destino.sucursal) || !destino.proveedor)) return null;
+  // "*" = todas: un pago a cuenta total puede abarcar todos los proveedores y/o ambas sucursales.
+  if (aCuenta && (!(SUCURSALES.includes(destino.sucursal) || destino.sucursal === "*") || !destino.proveedor)) return null;
   return {
     id: p.id,
     creado: typeof p.creado === "number" ? p.creado : Date.now(),

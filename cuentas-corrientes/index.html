@@ -175,10 +175,18 @@
     <h3>Registrar pago</h3>
     <div class="segmento" role="group" aria-label="A qué se aplica el pago">
       <button type="button" class="seg-btn active" data-modo-pago="factura">Una factura</button>
-      <button type="button" class="seg-btn" data-modo-pago="cuenta">A cuenta (saldo general)</button>
+      <button type="button" class="seg-btn" data-modo-pago="cuenta">A cuenta de un proveedor</button>
+      <button type="button" class="seg-btn" data-modo-pago="total">Saldo a cuenta total</button>
     </div>
     <label id="filaFactura">Factura / deuda
       <select name="deudaId" id="selectDeudaPago"></select>
+    </label>
+    <label id="filaTotal" hidden>Sobre el saldo de
+      <select id="totalSucursal">
+        <option value="*">Ambas sucursales</option>
+        <option>San Martín 70</option>
+        <option>Dean Funes 18</option>
+      </select>
     </label>
     <div class="grid2" id="filaACuenta" hidden>
       <label>Sucursal

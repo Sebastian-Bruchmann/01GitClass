@@ -213,7 +213,7 @@ body::after { z-index: -2; }
 @media (prefers-reduced-motion: reduce) { .orbita .anillo { animation: none !important; } }
 
 /* Registrar pago: elegir entre una factura o a cuenta del saldo general */
-.segmento { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px;
+.segmento { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 999px;
   background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-shine); }
 .seg-btn { font: inherit; font-weight: 700; font-size: .88rem; border: none; background: transparent; color: var(--muted);
   padding: 8px 10px; border-radius: 999px; cursor: pointer; transition: background-color .3s var(--suave), color .3s ease, box-shadow .3s ease; }
@@ -225,3 +225,4 @@ body::after { z-index: -2; }
 .prov { flex-direction: column; align-items: stretch; gap: 8px; }
 .prov-info { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
 .prov .btn { justify-content: center; }
+@media (max-width: 600px) { .segmento { grid-template-columns: 1fr; border-radius: 18px; } .seg-btn { border-radius: 14px; } }
